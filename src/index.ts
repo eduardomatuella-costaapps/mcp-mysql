@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import dotenv from "dotenv";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { 
@@ -10,6 +11,9 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import mysql from "mysql2/promise";
+
+// Load environment variables from .env file
+dotenv.config();
 
 // Configuration schema
 const ConfigSchema = z.object({
@@ -46,6 +50,32 @@ class MySQLMCPServer {
     this.setupErrorHandling();
   }
 
+  private getConfigFromEnv(): Config {
+    const host = process.env.MYSQL_HOST;
+    const port = process.env.MYSQL_PORT ? parseInt(process.env.MYSQL_PORT) : 3306;
+    const user = process.env.MYSQL_USER;
+    const password = process.env.MYSQL_PASSWORD;
+    const database = process.env.MYSQL_DATABASE;
+    const ssl = process.env.MYSQL_SSL === 'true';
+    const connectionLimit = process.env.MYSQL_CONNECTION_LIMIT ? parseInt(process.env.MYSQL_CONNECTION_LIMIT) : 2;
+
+    if (!host || !user || !password) {
+      throw new Error(
+        'Missing required environment variables: MYSQL_HOST, MYSQL_USER, and MYSQL_PASSWORD must be set in .env file'
+      );
+    }
+
+    return {
+      host,
+      port,
+      user,
+      password,
+      database,
+      ssl,
+      connectionLimit,
+    };
+  }
+
   private setupErrorHandling(): void {
     this.server.onerror = (error: unknown) => {
       console.error("[MCP Error]", error);
@@ -54,6 +84,12 @@ class MySQLMCPServer {
     process.on("SIGINT", async () => {
       await this.cleanup();
       process.exit(0);
+    });
+
+    process.on("uncaughtException", async (error) => {
+      console.error("[Uncaught Exception]", error);
+      await this.cleanup();
+      process.exit(1);
     });
   }
 
@@ -116,42 +152,6 @@ class MySQLMCPServer {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       return {
         tools: [
-          {
-            name: "mysql_connect",
-            description: "Connect to a MySQL database with provided connection parameters",
-            inputSchema: {
-              type: "object",
-              properties: {
-                host: {
-                  type: "string",
-                  description: "MySQL server hostname or IP address",
-                },
-                port: {
-                  type: "number",
-                  description: "MySQL server port (default: 3306)",
-                  default: 3306,
-                },
-                user: {
-                  type: "string",
-                  description: "Database username",
-                },
-                password: {
-                  type: "string",
-                  description: "Database password",
-                },
-                database: {
-                  type: "string",
-                  description: "Database name (optional)",
-                },
-                ssl: {
-                  type: "boolean",
-                  description: "Use SSL connection (default: false)",
-                  default: false,
-                },
-              },
-              required: ["host", "user", "password"],
-            },
-          },
           {
             name: "mysql_query",
             description: "Execute a SQL query on the connected MySQL database",
@@ -248,14 +248,6 @@ class MySQLMCPServer {
               required: ["table"],
             },
           },
-          {
-            name: "mysql_disconnect",
-            description: "Disconnect from the MySQL database",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-          },
         ],
       };
     });
@@ -265,8 +257,6 @@ class MySQLMCPServer {
 
       try {
         switch (name) {
-          case "mysql_connect":
-            return await this.handleConnect(args);
           case "mysql_query":
             return await this.handleQuery(args);
           case "mysql_list_databases":
@@ -279,8 +269,6 @@ class MySQLMCPServer {
             return await this.handleShowIndexes(args);
           case "mysql_get_table_stats":
             return await this.handleGetTableStats(args);
-          case "mysql_disconnect":
-            return await this.handleDisconnect();
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
@@ -324,7 +312,7 @@ class MySQLMCPServer {
 
   private async handleQuery(args: any) {
     if (!this.pool) {
-      throw new Error("Not connected to MySQL. Use mysql_connect first.");
+      throw new Error("Not connected to MySQL. Database connection failed during initialization.");
     }
 
     const { query, parameters = [] } = args;
@@ -369,7 +357,7 @@ class MySQLMCPServer {
 
   private async handleListDatabases() {
     if (!this.pool) {
-      throw new Error("Not connected to MySQL. Use mysql_connect first.");
+      throw new Error("Not connected to MySQL. Database connection failed during initialization.");
     }
 
     try {
@@ -389,7 +377,7 @@ class MySQLMCPServer {
 
   private async handleListTables(args: any) {
     if (!this.pool) {
-      throw new Error("Not connected to MySQL. Use mysql_connect first.");
+      throw new Error("Not connected to MySQL. Database connection failed during initialization.");
     }
 
     const { database } = args;
@@ -416,7 +404,7 @@ class MySQLMCPServer {
 
   private async handleDescribeTable(args: any) {
     if (!this.pool) {
-      throw new Error("Not connected to MySQL. Use mysql_connect first.");
+      throw new Error("Not connected to MySQL. Database connection failed during initialization.");
     }
 
     const { table, database } = args;
@@ -444,7 +432,7 @@ class MySQLMCPServer {
 
   private async handleShowIndexes(args: any) {
     if (!this.pool) {
-      throw new Error("Not connected to MySQL. Use mysql_connect first.");
+      throw new Error("Not connected to MySQL. Database connection failed during initialization.");
     }
 
     const { table, database } = args;
@@ -472,7 +460,7 @@ class MySQLMCPServer {
 
   private async handleGetTableStats(args: any) {
     if (!this.pool) {
-      throw new Error("Not connected to MySQL. Use mysql_connect first.");
+      throw new Error("Not connected to MySQL. Database connection failed during initialization.");
     }
 
     const { table, database } = args;
@@ -514,35 +502,25 @@ class MySQLMCPServer {
     }
   }
 
-  private async handleDisconnect() {
-    if (this.pool) {
-      await this.pool.end();
-      this.pool = null;
-      this.config = null;
-      return {
-        content: [
-          {
-            type: "text",
-            text: "Successfully disconnected from MySQL database",
-          },
-        ],
-      };
-    } else {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "No active MySQL connection to disconnect",
-          },
-        ],
-      };
-    }
-  }
-
   async run(): Promise<void> {
+    try {
+      // Load configuration from environment variables
+      const config = this.getConfigFromEnv();
+      this.config = config;
+
+      // Connect to the database on startup
+      this.pool = await this.createConnection(config);
+      console.error(`[Startup] Successfully connected to MySQL at ${config.host}:${config.port}${config.database ? ` (database: ${config.database})` : ""}`);
+    } catch (error) {
+      console.error(
+        `[Startup Error] Failed to connect to MySQL database. Please check your .env file configuration.\nError: ${error instanceof Error ? error.message : String(error)}`
+      );
+      process.exit(1);
+    }
+
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error("MySQL MCP server running on stdio");
+    console.error("[MCP] MySQL MCP server ready on stdio");
   }
 }
 
