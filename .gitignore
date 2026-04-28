@@ -3,8 +3,7 @@ build/
 dist/
 *.log
 .env
-.env.local
-.env.production
+.env.*
 .DS_Store
 *.tgz
 *.tar.gz

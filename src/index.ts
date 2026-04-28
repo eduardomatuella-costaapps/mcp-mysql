@@ -19,7 +19,7 @@ const ConfigSchema = z.object({
   password: z.string(),
   database: z.string().optional(),
   ssl: z.boolean().optional().default(false),
-  connectionLimit: z.number().optional().default(10),
+  connectionLimit: z.number().optional().default(2),
 });
 
 type Config = z.infer<typeof ConfigSchema>;
@@ -91,6 +91,25 @@ class MySQLMCPServer {
     } catch (error) {
       throw new Error(`Failed to connect to MySQL: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  private isSelectQuery(query: string): boolean {
+    if (typeof query !== "string") return false;
+    const trimmed = query.trim();
+    if (!trimmed) return false;
+
+    // Reject if semicolons or SQL comment tokens are present (prevents stacked statements and comment-based bypasses)
+    if (/[;]|--|\/\*/.test(trimmed)) return false;
+
+    // Allow queries starting with SELECT or WITH ... SELECT (CTE)
+    const selectStart = /^\s*(?:WITH\b[\s\S]*?\bSELECT\b|SELECT\b)/i;
+    if (!selectStart.test(trimmed)) return false;
+
+    // For extra safety, forbid any potentially dangerous SQL keywords appearing anywhere
+    const forbidden = /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP|TRUNCATE|GRANT|REVOKE|SET|CALL|EXEC|EXECUTE|MERGE|HANDLER|LOCK|UNLOCK|LOAD|INTO|OUTFILE|PROCEDURE|FUNCTION|DECLARE|USE|SOURCE)\b/i;
+    if (forbidden.test(trimmed)) return false;
+
+    return true;
   }
 
   private setupToolHandlers(): void {
@@ -312,6 +331,11 @@ class MySQLMCPServer {
     
     if (!query || typeof query !== "string") {
       throw new Error("Query is required and must be a string");
+    }
+
+    // Enforce SELECT-only queries
+    if (!this.isSelectQuery(query)) {
+      throw new Error("Only SELECT queries are allowed.");
     }
 
     try {
