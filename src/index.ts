@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import dotenv from "dotenv";
+import { fileURLToPath } from "url";
+import { dirname, resolve } from "path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { 
@@ -12,8 +14,11 @@ import {
 import { z } from "zod";
 import mysql from "mysql2/promise";
 
-// Load environment variables from .env file
-dotenv.config();
+// Load environment variables from .env file with explicit path
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const envPath = resolve(__dirname, "..", ".env");
+const result = dotenv.config({ path: envPath });
 
 // Configuration schema
 const ConfigSchema = z.object({
@@ -51,6 +56,11 @@ class MySQLMCPServer {
   }
 
   private getConfigFromEnv(): Config {
+    // Log environment loading for debugging
+    if (process.env.NODE_ENV !== 'test') {
+      console.error(`[Config] Loading environment from: ${envPath}`);
+    }
+    
     const host = process.env.MYSQL_HOST;
     const port = process.env.MYSQL_PORT ? parseInt(process.env.MYSQL_PORT) : 3306;
     const user = process.env.MYSQL_USER;
@@ -60,6 +70,7 @@ class MySQLMCPServer {
     const connectionLimit = process.env.MYSQL_CONNECTION_LIMIT ? parseInt(process.env.MYSQL_CONNECTION_LIMIT) : 2;
 
     if (!host || !user || !password) {
+      console.error(`[Config] Available environment variables: ${Object.keys(process.env).filter(k => k.startsWith('MYSQL_')).join(', ') || 'None'}`);
       throw new Error(
         'Missing required environment variables: MYSQL_HOST, MYSQL_USER, and MYSQL_PASSWORD must be set in .env file'
       );
@@ -504,6 +515,13 @@ class MySQLMCPServer {
 
   async run(): Promise<void> {
     try {
+      // Log environment loading status
+      if (result.error) {
+        console.error(`[Startup] Warning: Could not load .env file: ${result.error.message}`);
+      } else {
+        console.error(`[Startup] Successfully loaded environment from: ${envPath}`);
+      }
+
       // Load configuration from environment variables
       const config = this.getConfigFromEnv();
       this.config = config;
